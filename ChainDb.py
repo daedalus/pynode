@@ -20,7 +20,7 @@ from bitcoin.messages import msg_block, message_to_str, message_read
 from bitcoin.coredefs import COIN
 from bitcoin.scripteval import VerifySignature
 
-
+import zlib
 
 def tx_blk_cmp(a, b):
 	if a.dFeePerKB != b.dFeePerKB:
@@ -81,7 +81,7 @@ class HeightIdx(object):
 
 class ChainDb(object):
 	def __init__(self, settings, datadir, log, mempool, netmagic,
-		     readonly=False, fast_dbm=False):
+		     readonly=False, fast_dbm=False,compression=False):
 		self.settings = settings
 		self.log = log
 		self.mempool = mempool
@@ -91,6 +91,7 @@ class ChainDb(object):
 		self.blk_cache = Cache(500)
 		self.orphans = {}
 		self.orphan_deps = {}
+		self.compression = compression
 
 		# LevelDB to hold:
 		#    tx:*      transaction outputs
@@ -157,10 +158,11 @@ class ChainDb(object):
 			return None
 
 		block = self.getblock(txidx.blkhash)
-		for tx in block.vtx:
-			tx.calc_sha256()
-			if tx.sha256 == txhash:
-				return tx
+		if block:
+			for tx in block.vtx:
+				tx.calc_sha256()
+				if tx.sha256 == txhash:
+					return tx
 
 		self.log.write("ERROR: Missing TX %064x in block %064x" % (txhash, txidx.blkhash))
 		return None
@@ -196,7 +198,18 @@ class ChainDb(object):
 			self.blk_read.seek(fpos)
 
 			# read and decode "block" msg
-			msg = message_read(self.netmagic, self.blk_read)
+			if self.compression:
+				recvbuf = self.blk_read.read(4+4)
+				if recvbuf[:4] == 'ZLIB':
+					msg_len = int(recvbuf[4:8].encode('hex'),16)
+					recvbuf = self.blk_read.read(msg_len)
+			
+					f = cStringIO.StringIO(zlib.decompress(recvbuf))
+			
+				msg = message_read(self.netmagic, f)
+			else:
+				msg = message_read(self.netmagic, self.blk_read)
+
 			if msg is None:
 				return None
 			block = msg.block
@@ -563,6 +576,11 @@ class ChainDb(object):
 
 		# write "block" msg to storage
 		fpos = self.blk_write.tell()
+		
+		if self.compression:
+			msg_data = zlib.compress(msg_data,1)
+			msg_data = struct.pack('>4si%ds' % len(msg_data),'ZLIB',len(msg_data),msg_data)
+
 		self.blk_write.write(msg_data)
 		self.blk_write.flush()
 

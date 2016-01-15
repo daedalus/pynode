@@ -475,7 +475,7 @@ if __name__ == '__main__':
 
 	mempool = MemPool.MemPool(log)
 	chaindb = ChainDb.ChainDb(settings, settings['db'], log, mempool,
-				  netmagic, False, False)
+				  netmagic, False, False,compression=settings['compression'])
 	peermgr = PeerManager(log, mempool, chaindb, netmagic)
 
 	if 'loadblock' in settings:
