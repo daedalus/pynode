@@ -185,6 +185,15 @@ class ChainDb(object):
 		if self.haveblock(block.hashPrevBlock, False):
 			return True
 		return False
+		
+	def block_decompress(self,s):
+		recvbuf = s.read(4+4)
+		if recvbuf[:4] == 'ZLIB':
+			msg_len = int(recvbuf[4:8].encode('hex'),16)
+			recvbuf = s.read(msg_len)
+			
+			f = cStringIO.StringIO(zlib.decompress(recvbuf))
+			return f
 
 	def getblock(self, blkhash):
 		block = self.blk_cache.get(blkhash)
@@ -199,14 +208,7 @@ class ChainDb(object):
 
 			# read and decode "block" msg
 			if self.compression:
-				recvbuf = self.blk_read.read(4+4)
-				if recvbuf[:4] == 'ZLIB':
-					msg_len = int(recvbuf[4:8].encode('hex'),16)
-					recvbuf = self.blk_read.read(msg_len)
-			
-					f = cStringIO.StringIO(zlib.decompress(recvbuf))
-			
-				msg = message_read(self.netmagic, f)
+				msg = message_read(self.netmagic, self.block_decompress(self.blk_read))
 			else:
 				msg = message_read(self.netmagic, self.blk_read)
 
@@ -542,6 +544,11 @@ class ChainDb(object):
                		return self.db.Get('height:'+heightstr)
                 except KeyError:
                         pass
+                        
+        def block_compress(self,msg_data):
+		msg_data = zlib.compress(msg_data,1)
+		msg_data = struct.pack('>4si%ds' % len(msg_data),'ZLIB',len(msg_data),msg_data)
+		return msg_data
 
 	def putoneblock(self, block):
 		block.calc_sha256()
@@ -578,8 +585,7 @@ class ChainDb(object):
 		fpos = self.blk_write.tell()
 		
 		if self.compression:
-			msg_data = zlib.compress(msg_data,1)
-			msg_data = struct.pack('>4si%ds' % len(msg_data),'ZLIB',len(msg_data),msg_data)
+			msg_data = self.block_compress(msg_data)
 
 		self.blk_write.write(msg_data)
 		self.blk_write.flush()
